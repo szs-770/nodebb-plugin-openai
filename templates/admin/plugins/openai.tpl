@@ -123,6 +123,34 @@
 							{{tx("openai:admin.summary-render-markdown-help")}}
 						</p>
 					</div>
+
+					<div class="mb-3 mt-3">
+						<label class="form-label" for="summaryKeyMode">{{tx("openai:admin.summary-key-mode")}}</label>
+						<select class="form-select" id="summaryKeyMode" name="summaryKeyMode">
+							<option value="owner">{{tx("openai:admin.summary-key-owner")}}</option>
+							<option value="user">{{tx("openai:admin.summary-key-user")}}</option>
+							<option value="both">{{tx("openai:admin.summary-key-both")}}</option>
+						</select>
+						<p class="form-text">
+							{{tx("openai:admin.summary-key-mode-help")}}
+						</p>
+					</div>
+
+					<div class="mb-3">
+						<label class="form-label" for="summaryHourlyLimit">{{tx("openai:admin.summary-hourly-limit")}}</label>
+						<input type="number" min="0" id="summaryHourlyLimit" name="summaryHourlyLimit" title="Summary requests per hour" class="form-control" placeholder="20">
+						<p class="form-text">
+							{{tx("openai:admin.summary-hourly-limit-help")}}
+						</p>
+					</div>
+
+					<div class="form-check form-switch">
+						<input type="checkbox" class="form-check-input" id="summaryDisableCustomPrompt" name="summaryDisableCustomPrompt">
+						<label for="summaryDisableCustomPrompt" class="form-check-label">{{tx("openai:admin.summary-disable-custom-prompt")}}</label>
+						<p class="form-text">
+							{{tx("openai:admin.summary-disable-custom-prompt-help")}}
+						</p>
+					</div>
 				</div>
 
 				<div class="mb-4">

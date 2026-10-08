@@ -36,6 +36,9 @@ const defaults = {
 	summarySystemPrompt: '',
 	summaryFinalSystemPrompt: '',
 	summaryRenderMarkdown: 'off',
+	summaryKeyMode: 'owner',
+	summaryDisableCustomPrompt: 'off',
+	summaryHourlyLimit: 20,
 	mentionApiKey: '',
 	mentionApiBaseUrl: '',
 	mentionMinimumReputation: '',
@@ -455,17 +458,29 @@ plugin.addAdminNavigation = (header) => {
 	return header;
 };
 
-plugin.filterTopicThreadTools = async (hookData) => {
-	const settings = await getSettings();
-	const allowed = await canUseOpenAI(hookData.uid, settings, true);
-	if (!allowed) {
-		return hookData;
+// Tells the client whether to show the "summarize topic" button, and how the API key works.
+plugin.filterTopicGet = async (hookData) => {
+	try {
+		const { topic, uid } = hookData;
+		if (!topic || !(parseInt(uid, 10) > 0)) {
+			return hookData;
+		}
+		const settings = await getSettings();
+		const mode = getKeyMode(settings);
+		const available = mode !== 'owner' || !!openai;
+		if (available && await canUseOpenAI(uid, settings, true)) {
+			const lang = (await user.getSettings(uid)).userLang || meta.config.defaultLang || 'en-GB';
+			topic.openaiSummary = {
+				label: await translator.translate('[[openai:summarize-topic]]', lang),
+				mode,
+				customPrompt: settings.summaryDisableCustomPrompt !== 'on',
+				defaultPrompt: (settings.summarySystemPrompt || '').trim(),
+				renderMarkdown: settings.summaryRenderMarkdown === 'on',
+			};
+		}
+	} catch (err) {
+		console.error('[openai] filterTopicGet failed:', err.message);
 	}
-	hookData.tools.push({
-		class: 'openai-summarize-topic',
-		icon: 'fa-wand-magic-sparkles',
-		title: '[[openai:summarize-topic]]',
-	});
 	return hookData;
 };
 
@@ -503,23 +518,186 @@ plugin.actionPostChangeOwner = async (hookData) => {
 
 socketPlugins.openai = {};
 
-socketPlugins.openai.summarizeTopic = async function (socket, data) {
-	const { tid } = data;
-	if (!await privileges.topics.can('topics:read', tid, socket.uid)) {
+function getKeyMode(settings) {
+	return ['owner', 'user', 'both'].includes(settings.summaryKeyMode) ? settings.summaryKeyMode : 'owner';
+}
+
+// Who pays for a request: the forum's key, or the key the user typed in their own browser.
+// A user's key is used for this request only and is never stored on the server.
+function pickClient(settings, userKey) {
+	const mode = getKeyMode(settings);
+	const key = typeof userKey === 'string' ? userKey.trim().slice(0, 400) : '';
+	if (mode !== 'owner' && key) {
+		return {
+			client: new OpenAI({ apiKey: key, baseURL: settings.apiBaseUrl || 'https://api.openai.com/v1' }),
+			own: false,
+		};
+	}
+	if (mode === 'user' || (mode === 'both' && !openai)) {
+		throw new Error('[[openai:error.api-key-required]]');
+	}
+	if (!openai) {
+		throw new Error('[[openai:error.not-configured]]');
+	}
+	return { client: openai, own: true };
+}
+
+// Requests that spend the forum's key are limited per user (administrators are exempt).
+const usage = new Map();
+const COOLDOWN_MS = 10 * 1000;
+
+async function checkRateLimit(uid, settings) {
+	const configured = settings.summaryHourlyLimit;
+	const limit = configured === '' || configured == null ? 20 : parseInt(configured, 10);
+	if (!(limit > 0) || await user.isAdministrator(uid)) {
+		return;
+	}
+	const now = Date.now();
+	const recent = (usage.get(uid) || []).filter(t => now - t < 3600 * 1000);
+	if (recent.length >= limit || (recent.length && now - recent[recent.length - 1] < COOLDOWN_MS)) {
+		usage.set(uid, recent);
+		throw new Error('[[openai:error.rate-limited]]');
+	}
+	recent.push(now);
+	usage.set(uid, recent);
+}
+
+// Gemini answers a wrong key with a bare 400, OpenAI with 401. With the forum's own key a refusal is
+// the admin's problem, so only a user's key is reported as invalid.
+function translateApiError(err, own) {
+	if (err && (err.cancelled || err.name === 'APIUserAbortError')) {
+		return new Error('[[openai:error.cancelled]]');
+	}
+	if (err && !own && [400, 401, 403].includes(err.status)) {
+		return new Error('[[openai:error.invalid-key]]');
+	}
+	if (err && err.status === 429) {
+		return new Error('[[openai:error.provider-rate-limited]]');
+	}
+	if (err && err.message && err.message.startsWith('[[')) {
+		return err;
+	}
+	console.error('[openai] request failed:', err && err.stack);
+	return new Error('[[openai:error.request-failed]]');
+}
+
+// Running requests, so the user can stop one (and stop paying for it). A job belongs to the socket's user.
+const jobs = new Map();
+
+function startJob(socket, jobId) {
+	if (typeof jobId !== 'string' || !/^[\w-]{1,64}$/.test(jobId)) {
+		return { signal: undefined, onProgress: () => {}, end: () => {} };
+	}
+	const controller = new AbortController();
+	jobs.set(jobId, { uid: socket.uid, controller });
+	return {
+		signal: controller.signal,
+		onProgress: data => sockets.server.in(`uid_${socket.uid}`).emit('event:openai.progress', { jobId, ...data }),
+		end: () => jobs.delete(jobId),
+	};
+}
+
+function readHistory(history) {
+	if (!Array.isArray(history)) {
+		return [];
+	}
+	return history
+		.filter(m => m && ['user', 'assistant'].includes(m.role) && typeof m.content === 'string' && m.content.trim())
+		.slice(-8)
+		.map(m => ({ role: m.role, content: m.content.slice(0, 3000) }));
+}
+
+async function assertSummaryAccess(socket, tid) {
+	if (!(parseInt(socket.uid, 10) > 0) || !await privileges.topics.can('topics:read', tid, socket.uid)) {
 		throw new Error('[[error:no-privileges]]');
 	}
 	const settings = await getSettings();
 	if (!await canUseOpenAI(socket.uid, settings)) {
-		return;
+		throw new Error('[[error:no-privileges]]');
+	}
+	return settings;
+}
+
+socketPlugins.openai.summarizeTopic = async function (socket, data) {
+	const tid = parseInt(data && data.tid, 10);
+	if (!(tid > 0)) {
+		throw new Error('[[error:invalid-data]]');
+	}
+	const settings = await assertSummaryAccess(socket, tid);
+	const customPrompt = settings.summaryDisableCustomPrompt === 'on' || typeof data.prompt !== 'string' ?
+		'' : data.prompt.trim().slice(0, 4000);
+	const { client, own } = pickClient(settings, data.apiKey);
+	const renderMarkdown = settings.summaryRenderMarkdown === 'on';
+
+	// the shared summary is only for the plain request on the forum's key
+	const shareable = own && !customPrompt;
+	if (shareable && !data.force) {
+		const cached = await topics.getTopicField(tid, 'openai:summary');
+		if (cached) {
+			let meta = {};
+			try {
+				meta = JSON.parse(await db.getObjectField(`topic:${tid}`, 'openai:summaryMeta')) || {};
+			} catch (err) { /* cached before meta existed */ }
+			return { summary: summary.stripReasoning(cached), fetched: meta.fetched, total: meta.total, cached: true, renderMarkdown };
+		}
 	}
 
-	let openaiSummary = await topics.getTopicField(tid, 'openai:summary');
-	if (!openaiSummary) {
-		openaiSummary = await summary.summarizeTopic(tid, openai, settings);
-		await topics.setTopicField(tid, 'openai:summary', openaiSummary);
+	if (own) {
+		await checkRateLimit(socket.uid, settings);
 	}
-	return {
-		summary: summary.stripReasoning(openaiSummary),
-		renderMarkdown: settings.summaryRenderMarkdown === 'on',
-	};
+	const job = startJob(socket, data.jobId);
+	let result;
+	try {
+		result = await summary.summarizeTopic(tid, client, settings, {
+			prompt: customPrompt,
+			signal: job.signal,
+			onProgress: job.onProgress,
+		});
+	} catch (err) {
+		throw translateApiError(err, own);
+	} finally {
+		job.end();
+	}
+	if (!result.summary) {
+		throw new Error('[[openai:error.empty-topic]]');
+	}
+	if (shareable) {
+		await topics.setTopicField(tid, 'openai:summary', result.summary);
+		await db.setObjectField(`topic:${tid}`, 'openai:summaryMeta', JSON.stringify({ fetched: result.fetched, total: result.total }));
+	}
+	return { ...result, cached: false, renderMarkdown };
+};
+
+socketPlugins.openai.askTopic = async function (socket, data) {
+	const tid = parseInt(data && data.tid, 10);
+	const question = data && typeof data.question === 'string' ? data.question.trim().slice(0, 1000) : '';
+	if (!(tid > 0) || !question) {
+		throw new Error('[[error:invalid-data]]');
+	}
+	const settings = await assertSummaryAccess(socket, tid);
+	const { client, own } = pickClient(settings, data.apiKey);
+	if (own) {
+		await checkRateLimit(socket.uid, settings);
+	}
+	const job = startJob(socket, data.jobId);
+	let answer;
+	try {
+		answer = await summary.askTopic(tid, question, client, settings, {
+			history: readHistory(data.history),
+			signal: job.signal,
+		});
+	} catch (err) {
+		throw translateApiError(err, own);
+	} finally {
+		job.end();
+	}
+	return { answer };
+};
+
+socketPlugins.openai.cancel = async function (socket, data) {
+	const job = jobs.get(data && data.jobId);
+	if (job && job.uid === socket.uid) {
+		job.controller.abort();
+		jobs.delete(data.jobId);
+	}
 };

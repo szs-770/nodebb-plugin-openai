@@ -1,0 +1,103 @@
+/* topic summary dialog */
+.openai-summary-dialog .modal-footer {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-start;
+	gap: 0.5rem;
+}
+.openai-summary-dialog .modal-footer > button {
+	margin: 0 !important;
+}
+.openai-summary-dialog .modal-footer .openai-close-btn {
+	margin-inline-start: auto !important;
+}
+.openai-summary-dialog .openai-cached-badge {
+	font-size: 0.7rem;
+	font-weight: 500;
+	margin-inline-start: 0.5rem;
+	vertical-align: middle;
+}
+.openai-chat-row {
+	margin-bottom: 0.5rem;
+}
+.openai-chat-row.openai-chat-user {
+	text-align: end;
+}
+.openai-chat-row.openai-chat-ai {
+	text-align: start;
+}
+.openai-chat-bubble {
+	display: inline-block;
+	max-width: 88%;
+	padding: 0.5rem 0.9rem;
+	border-radius: 1rem;
+	text-align: start;
+}
+.openai-chat-user .openai-chat-bubble {
+	border-end-end-radius: 0.25rem;
+}
+.openai-chat-ai .openai-chat-bubble {
+	border-end-start-radius: 0.25rem;
+}
+.openai-chat-bubble > :last-child {
+	margin-bottom: 0;
+}
+
+/* background progress / "summary ready" toast */
+.openai-toast {
+	position: fixed;
+	inset-block-end: 1.5rem;
+	inset-inline-start: 1.5rem;
+	z-index: 1090;
+	display: flex;
+	align-items: center;
+	gap: 0.6rem;
+	max-width: calc(100vw - 3rem);
+	padding-block: 0.4rem;
+	padding-inline: 1rem 0.4rem;
+	border: 1px solid var(--bs-border-color);
+	border-radius: 50rem;
+	background: var(--bs-body-bg);
+	color: var(--bs-body-color);
+	box-shadow: 0 0.5rem 1.5rem rgba(0, 0, 0, 0.18);
+	font-size: 0.9rem;
+	opacity: 0;
+	transform: translateY(1rem);
+	pointer-events: none;
+	transition: opacity 0.25s, transform 0.25s;
+}
+.openai-toast.show {
+	opacity: 1;
+	transform: none;
+	pointer-events: auto;
+}
+.openai-toast-bar {
+	flex: 0 0 4rem;
+	height: 0.3rem;
+	border-radius: 1rem;
+	background: var(--bs-secondary-bg);
+	overflow: hidden;
+}
+.openai-toast-bar > span {
+	display: block;
+	height: 100%;
+	background: var(--bs-primary);
+	transition: width 0.3s;
+}
+@media (max-width: 767.98px) {
+	/* above the bottom navigation bar */
+	.openai-toast {
+		inset-block-end: calc(4.5rem + env(safe-area-inset-bottom));
+		inset-inline: 1rem;
+		max-width: none;
+	}
+	.openai-toast-text {
+		flex: 1 1 auto;
+	}
+}
+@media (min-width: 768px) {
+	/* keep clear of the side bar */
+	.openai-toast {
+		inset-inline-start: 4.5rem;
+	}
+}

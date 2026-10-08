@@ -7,7 +7,7 @@
 		{ "hook": "filter:admin.header.build", "method": "addAdminNavigation" },
 		{ "hook": "action:mentions.notify", "method": "actionMentionsNotify" },
 		{ "hook": "action:messaging.save", "method": "actionMessagingSave" },
-		{ "hook": "filter:topic.thread_tools", "method": "filterTopicThreadTools" },
+		{ "hook": "filter:topic.get", "method": "filterTopicGet" },
 
 		{ "hook": "action:topic.reply", "method": "actionTopicReply" },
 		{ "hook": "action:post.edit", "method": "actionPostEdit" },
@@ -16,6 +16,9 @@
  		{ "hook": "action:post.delete", "method": "actionPostDelete" },
 		{ "hook": "action:post.move", "method": "actionPostMove" },
 		{ "hook": "action:post.changeOwner", "method": "actionPostChangeOwner" }
+	],
+	"css": [
+		"./public/openai.css"
 	],
 	"scripts": [
 		"./public/lib/main.js"
